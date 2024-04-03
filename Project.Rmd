@@ -1,0 +1,236 @@
+---
+title: "Project"
+output:
+  pdf_document: default
+  html_document: default
+date: "2023-12-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(mclust)
+library(plotly)
+library(factoextra)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+Data load and Check
+
+```{r}
+data <- read.csv("Customer_Data.csv")
+
+colnames(data)
+summary(data)
+```
+Checking Null Values 
+
+```{r}
+null_values <- colSums(is.na(data))
+
+null_values
+```
+Checking Summary and Histogram of MINIMUM_PAYMENTS
+
+```{r}
+summary(data$MINIMUM_PAYMENTS)
+hist(data$MINIMUM_PAYMENTS)
+```
+Checking Summary and Histogram of CREDIT_LIMIT
+
+
+```{r}
+summary(data$CREDIT_LIMIT)
+hist(data$CREDIT_LIMIT)
+```
+from the both columns histogram, we can say they are not normally distributed. And null values are less compared to total data. So, we can compute median in null values
+
+```{r}
+median_value_min_pay <- median(data$MINIMUM_PAYMENTS, na.rm = TRUE)
+
+data$MINIMUM_PAYMENTS <- ifelse(is.na(data$MINIMUM_PAYMENTS), median_value_min_pay, data$MINIMUM_PAYMENTS)
+
+median_value_cred_lim <- median(data$CREDIT_LIMIT, na.rm = TRUE)
+
+data$CREDIT_LIMIT <- ifelse(is.na(data$CREDIT_LIMIT), median_value_cred_lim, data$CREDIT_LIMIT)
+```
+
+Checking Summary of both column are computing median in null values
+
+```{r}
+summary(data$MINIMUM_PAYMENTS)
+summary(data$CREDIT_LIMIT)
+```
+Checking if there are any duplicate rows
+
+```{r}
+num_duplicates <- sum(duplicated(data))
+num_duplicates
+```
+
+Removing CUST_ID for clustering
+
+```{r}
+data <- data[, !colnames(data) %in% "CUST_ID"]
+```
+
+Scaling the data
+
+```{r}
+scaled_data <- as.data.frame(scale(data))
+```
+
+PCA
+
+```{r}
+pc_out <- prcomp(scaled_data)
+
+biplot(pc_out)
+
+bi_plot <- plot_ly(x = pc_out$x[,1], y = pc_out$x[,2]) %>%
+           layout(title = "BiPlot",xaxis = list(title = "PC1"), yaxis = list(title = "PC2"))
+
+bi_plot
+```
+
+```{r}
+variance_explained <- (pc_out$sdev^2) / sum(pc_out$sdev^2)
+plot(variance_explained, type = "b", xlab = "Principal Component", ylab = "Percentage Variance Explained")
+```
+
+K-Means Model
+
+```{r}
+set.seed(1)
+fviz_nbclust(scaled_data, kmeans, method = "wss",k.max=10, nstart=20, iter.max=20) +
+  labs(subtitle = "Elbow method")
+```
+
+```{r}
+set.seed(1)
+
+fviz_nbclust(scaled_data, kmeans, method = "gap_stat", nboot = 20,k.max=20, nstart=20, iter.max=40) +
+  labs(subtitle = "Gap statistic method")
+```
+
+```{r}
+set.seed(1)
+
+fviz_nbclust(scaled_data, kmeans, method = "silhouette", nboot = 20,k.max=20, nstart=20, iter.max=40)+
+  labs(subtitle = "Silhouette method")
+```
+
+```{r}
+km_out <- kmeans(scaled_data, centers = 3, nstart = 25)
+
+#summary(km_out)
+
+sil_scores <- silhouette(km_out$cluster, dist(scaled_data))
+
+# Mean silhouette score
+mean_sil_score <- mean(sil_scores[, "sil_width"])
+
+cat("Mean Silhouette Score of K-Means:", mean_sil_score, "\n")
+```
+
+```{r}
+cluster_centers <- km_out$centers
+
+# Displaying cluster centers (average values of attributes within each cluster)
+print(cluster_centers)
+```
+
+```{r}
+kmeans_biplot <- plot_ly(x = pc_out$x[,1], y = pc_out$x[,2], 
+                 color = as.factor(km_out$cluster)) %>% 
+                 layout(title = "K-Means BiPlot",xaxis = list(title = "PC1"), yaxis = list(title = "PC2"))
+
+kmeans_biplot
+```
+
+```{r}
+data_with_kmeans_cluster <- cbind(data, Cluster = km_out$cluster)
+```
+
+
+```{r}
+kmeans_cluster_counts <- table(data_with_kmeans_cluster$Cluster)
+
+barplot(kmeans_cluster_counts, names.arg = c("1", "2", "3"),
+        xlab = "Cluster", ylab = "Frequency", main = "K-Means Cluster Counts")
+```
+
+Gaussian Mixture Model
+
+```{r}
+bics <- matrix(NA, nrow = 5, ncol = 6)
+
+cluster_names <- 1:5
+covariance_names <- c("EII", "VII", "EEI", "VEI", "EVI", "VVI")
+
+for (k in cluster_names) {
+  for (covariance in covariance_names) {
+    model <- Mclust(scaled_data, G = k, modelNames = covariance)
+    if (!is.null(model)) {
+      bics[k, match(covariance, covariance_names)] <- BIC(model)
+    }
+  }
+}
+
+rownames(bics) <- cluster_names
+colnames(bics) <- covariance_names
+```
+
+```{r}
+bics
+```
+Taking Clusters 5 and covariance VEI as BIC value of their is lowest that is 290150.8
+
+```{r}
+best_gmm_model <- Mclust(scaled_data, G = 5, modelNames = "VEI")
+
+#summary(best_gmm_model)
+
+sil_scores_gmm <- silhouette(best_gmm_model$classification, dist(scaled_data))
+
+# Mean silhouette score
+mean_sil_score_gmm <- mean(sil_scores_gmm[, "sil_width"])
+
+cat("Mean Silhouette Score of Gaussian Mixture Model:", mean_sil_score_gmm, "\n")
+```
+
+```{r}
+gmm_means <- best_gmm_model$parameters$mean
+gmm_covariances <- best_gmm_model$parameters$variance
+
+# Displaying cluster centers (average values of attributes within each cluster)
+print(gmm_means)
+```
+
+```{r}
+gmm_biplot <- plot_ly(x = pc_out$x[,1], y = pc_out$x[,2], 
+                 color = as.factor(best_gmm_model$classification)) %>% 
+                 layout(title = "Gaussian Mixture Model BiPlot",xaxis = list(title = "PC1"), yaxis = list(title = "PC2"))
+
+gmm_biplot
+```
+
+```{r}
+data_with_gmm_cluster <- cbind(data, Cluster = best_gmm_model$classification)
+```
+
+```{r}
+gmm_cluster_counts <- table(data_with_gmm_cluster$Cluster)
+
+barplot(gmm_cluster_counts, names.arg = c("1", "2", "3", "4", "5"),
+        xlab = "Cluster", ylab = "Frequency", main = "K-Means Cluster Counts")
+```
+
+```{r}
+
+```
